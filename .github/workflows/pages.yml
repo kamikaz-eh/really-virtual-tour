@@ -1,0 +1,42 @@
+name: Deploy WebXR demo to GitHub Pages
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository (with LFS)
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      # Some setups need this to pull the real binaries (not just pointers)
+      - name: Checkout LFS objects
+        run: git lfs checkout
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      # Upload the site files (index.html + apartment.glb) from the repo root
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
