@@ -7,24 +7,284 @@
 
     <!-- A-Frame -->
     <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+
+    <!-- A-Frame Extras (movement-controls for smooth locomotion in VR + WASD support) -->
+    <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-extras@6.1.1/dist/aframe-extras.min.js"></script>
+
+    <style>
+      body { margin: 0; background: #000; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+
+      /* Top-right buttons */
+      .ui-top {
+        position: fixed; top: 12px; right: 12px; z-index: 9999;
+        display: flex; gap: 10px;
+      }
+      .btn {
+        border: 0; border-radius: 12px; padding: 10px 12px;
+        background: rgba(0,0,0,0.55); color: #fff;
+        font-size: 14px; cursor: pointer;
+        backdrop-filter: blur(6px);
+      }
+      .btn:hover { background: rgba(0,0,0,0.7); }
+
+      /* Mobile movement pad (bottom-left) */
+      .dpad {
+        position: fixed; left: 12px; bottom: 12px; z-index: 9999;
+        display: none; /* shown only on touch devices via JS */
+        gap: 8px;
+        background: rgba(0,0,0,0.35);
+        padding: 10px;
+        border-radius: 16px;
+        backdrop-filter: blur(6px);
+        user-select: none;
+        -webkit-user-select: none;
+        touch-action: none;
+      }
+      .dpad-grid {
+        display: grid;
+        grid-template-columns: 48px 48px 48px;
+        grid-template-rows: 48px 48px 48px;
+        gap: 8px;
+      }
+      .padbtn {
+        width: 48px; height: 48px;
+        border-radius: 14px;
+        border: 0;
+        background: rgba(255,255,255,0.12);
+        color: #fff;
+        font-size: 18px;
+      }
+      .padbtn:active { background: rgba(255,255,255,0.22); }
+
+      /* Modal form */
+      .modal-backdrop {
+        position: fixed; inset: 0; z-index: 10000;
+        background: rgba(0,0,0,0.6);
+        display: none; align-items: center; justify-content: center;
+        padding: 18px;
+      }
+      .modal {
+        width: min(520px, 100%);
+        background: #111;
+        border-radius: 18px;
+        padding: 18px;
+        color: #fff;
+        box-shadow: 0 12px 50px rgba(0,0,0,0.5);
+      }
+      .modal h2 { margin: 0 0 10px 0; font-size: 18px; }
+      .modal p { margin: 0 0 14px 0; opacity: 0.9; }
+      .modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
+      .btn-primary { background: rgba(74,163,255,0.85); color: #06111c; }
+      .btn-primary:hover { background: rgba(74,163,255,1); }
+      .btn-danger { background: rgba(255,90,90,0.85); }
+      .btn-danger:hover { background: rgba(255,90,90,1); }
+    </style>
   </head>
 
-  <body style="margin:0">
-    <a-scene background="color: #111" webxr="optionalFeatures: local-floor, bounded-floor;">
-      <!-- basic lighting -->
-      <a-entity light="type: ambient; intensity: 0.8"></a-entity>
-      <a-entity light="type: directional; intensity: 0.8" position="2 6 3"></a-entity>
+  <body>
+    <!-- Always-visible buttons -->
+    <div class="ui-top">
+      <button class="btn" id="enterVrBtn">Enter VR</button>
+      <button class="btn btn-primary" id="applyBtn">Apply now</button>
+    </div>
 
-      <!-- load your apartment -->
-      <a-entity gltf-model="apt1.glb" position="0 0 0" rotation="0 0 0"></a-entity>
+    <!-- Mobile D-pad -->
+    <div class="dpad" id="dpad">
+      <div class="dpad-grid">
+        <div></div>
+        <button class="padbtn" data-move="forward">↑</button>
+        <div></div>
 
-      <!-- camera + simple controls (works on desktop/mobile; VR uses headset/controller) -->
-      <a-entity position="0 1.6 3">
-        <a-camera></a-camera>
+        <button class="padbtn" data-move="left">←</button>
+        <button class="padbtn" data-move="stop">•</button>
+        <button class="padbtn" data-move="right">→</button>
+
+        <div></div>
+        <button class="padbtn" data-move="backward">↓</button>
+        <div></div>
+      </div>
+    </div>
+
+    <!-- Modal -->
+    <div class="modal-backdrop" id="modalBackdrop" role="dialog" aria-modal="true">
+      <div class="modal">
+        <h2>Apply now</h2>
+        <p>Did you like the apartment?</p>
+        <div class="modal-actions">
+          <button class="btn btn-danger" id="noBtn">No</button>
+          <button class="btn btn-primary" id="yesBtn">Yes</button>
+          <button class="btn" id="closeBtn">Close</button>
+        </div>
+        <p id="modalMessage" style="margin-top:14px; display:none;"></p>
+      </div>
+    </div>
+
+    <a-scene
+      id="scene"
+      background="color: #111"
+      renderer="colorManagement: true;"
+      vr-mode-ui="enabled: false"  <!-- we use our own VR button -->
+      webxr="optionalFeatures: local-floor, bounded-floor;"
+    >
+      <!-- Lighting -->
+      <a-entity light="type: ambient; intensity: 0.9"></a-entity>
+      <a-entity light="type: directional; intensity: 0.9" position="2 6 3"></a-entity>
+
+      <!-- APARTMENT MODEL -->
+      <!-- Change this if your filename differs -->
+      <a-entity id="apt" gltf-model="apartment.glb" position="0 0 0" rotation="0 0 0"></a-entity>
+
+      <!-- IMPORTANT: Remove the extra floor plane to prevent z-fighting.
+           If your model has NO floor, you can add a plane back, but place it slightly lower, e.g. y = -0.02 -->
+      <!-- <a-plane rotation="-90 0 0" width="50" height="50" color="#222" position="0 -0.02 0"></a-plane> -->
+
+      <!-- PLAYER RIG -->
+      <!-- movement-controls provides:
+           - VR thumbstick smooth locomotion (Quest controllers)
+           - Desktop WASD movement
+      -->
+      <a-entity id="rig" movement-controls="speed: 1.4; fly: false" position="0 0 0">
+        <!-- Camera height (this is the "5 feet off the floor" fix)
+             1.35m is a slightly shorter standing height / comfortable VR height.
+             Try 1.2–1.6 as needed. -->
+        <a-entity id="camera" camera position="0 1.35 0" look-controls></a-entity>
+
+        <!-- Controllers for VR -->
+        <a-entity laser-controls="hand: left"></a-entity>
+        <a-entity laser-controls="hand: right"></a-entity>
       </a-entity>
-
-      <!-- ground plane (optional, but helps if model has gaps) -->
-      <a-plane rotation="-90 0 0" width="50" height="50" color="#222"></a-plane>
     </a-scene>
+
+    <script>
+      const sceneEl = document.querySelector("#scene");
+      const rig = document.querySelector("#rig");
+      const cameraEl = document.querySelector("#camera");
+
+      // 1) START POSITION LOWER
+      // If you're spawning "inside a wall" or too high/low, adjust rig position here.
+      // Example: rig.setAttribute("position", "0 0 3");
+      // Keep camera Y as your "eye height".
+      // (Leaving rig at 0 0 0 is fine if your model origin is sensible.)
+
+      // 3) ALWAYS SHOW "ENTER VR" BUTTON ON DESKTOP
+      document.querySelector("#enterVrBtn").addEventListener("click", async () => {
+        // WebXR requires a user gesture; this click qualifies.
+        try {
+          if (sceneEl && sceneEl.enterVR) {
+            sceneEl.enterVR();
+          } else {
+            alert("VR not supported in this browser.");
+          }
+        } catch (e) {
+          alert("Could not enter VR here. Try in Quest Browser or a WebXR-enabled browser.");
+        }
+      });
+
+      // 4) MOBILE MOVEMENT PAD (simple smooth walking)
+      // Show D-pad only on touch devices:
+      const isTouch = ("ontouchstart" in window) || (navigator.maxTouchPoints > 0);
+      const dpad = document.querySelector("#dpad");
+      if (isTouch) dpad.style.display = "block";
+
+      let moveState = { forward: false, backward: false, left: false, right: false };
+      const SPEED = 1.2; // meters per second on mobile
+
+      function setMove(dir, on) {
+        moveState[dir] = on;
+      }
+
+      function stopAll() {
+        moveState.forward = moveState.backward = moveState.left = moveState.right = false;
+      }
+
+      // Touch + mouse support for the D-pad buttons
+      dpad.addEventListener("pointerdown", (e) => {
+        const btn = e.target.closest("button[data-move]");
+        if (!btn) return;
+        const move = btn.getAttribute("data-move");
+        e.preventDefault();
+
+        stopAll();
+        if (move === "forward") setMove("forward", true);
+        if (move === "backward") setMove("backward", true);
+        if (move === "left") setMove("left", true);
+        if (move === "right") setMove("right", true);
+      });
+
+      dpad.addEventListener("pointerup", (e) => { e.preventDefault(); stopAll(); });
+      dpad.addEventListener("pointercancel", (e) => { e.preventDefault(); stopAll(); });
+      dpad.addEventListener("pointerleave", (e) => { e.preventDefault(); stopAll(); });
+
+      // Per-frame movement for mobile buttons
+      sceneEl.addEventListener("loaded", () => {
+        sceneEl.addEventListener("tick", (t, dt) => {
+          if (!isTouch) return;
+          const delta = (dt || 0) / 1000;
+          if (delta <= 0) return;
+
+          // Move relative to camera heading (so forward is "where you're looking")
+          const rot = cameraEl.getAttribute("rotation");
+          const yaw = (rot.y || 0) * Math.PI / 180;
+
+          let dx = 0, dz = 0;
+          if (moveState.forward) dz -= 1;
+          if (moveState.backward) dz += 1;
+          if (moveState.left) dx -= 1;
+          if (moveState.right) dx += 1;
+
+          if (dx === 0 && dz === 0) return;
+
+          // Normalize
+          const len = Math.hypot(dx, dz);
+          dx /= len; dz /= len;
+
+          // Rotate by yaw
+          const cos = Math.cos(yaw), sin = Math.sin(yaw);
+          const rx = dx * cos - dz * sin;
+          const rz = dx * sin + dz * cos;
+
+          const pos = rig.getAttribute("position");
+          rig.setAttribute("position", {
+            x: pos.x + rx * SPEED * delta,
+            y: pos.y,
+            z: pos.z + rz * SPEED * delta
+          });
+        });
+      });
+
+      // 5) APPLY NOW MODAL
+      const modalBackdrop = document.querySelector("#modalBackdrop");
+      const modalMsg = document.querySelector("#modalMessage");
+
+      function openModal() {
+        modalMsg.style.display = "none";
+        modalMsg.textContent = "";
+        modalBackdrop.style.display = "flex";
+      }
+
+      function closeModal() {
+        modalBackdrop.style.display = "none";
+      }
+
+      document.querySelector("#applyBtn").addEventListener("click", openModal);
+      document.querySelector("#closeBtn").addEventListener("click", closeModal);
+
+      document.querySelector("#yesBtn").addEventListener("click", () => {
+        modalMsg.style.display = "block";
+        modalMsg.textContent = "Congratulations, you've been approved!";
+      });
+
+      document.querySelector("#noBtn").addEventListener("click", () => {
+        modalMsg.style.display = "block";
+        modalMsg.textContent = "Good. We don't like you either.";
+        // Close after a beat for comedic timing
+        setTimeout(closeModal, 1200);
+      });
+
+      // Click outside modal closes it
+      modalBackdrop.addEventListener("click", (e) => {
+        if (e.target === modalBackdrop) closeModal();
+      });
+    </script>
   </body>
 </html>
